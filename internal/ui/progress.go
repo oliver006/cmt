@@ -128,7 +128,7 @@ var ProgressMessages = struct {
 }{
 	StagingFiles:      "Staging all changes...",
 	AnalyzingChanges:  "Analyzing changes...",
-	GeneratingMessage: "Generating commit message with Claude...",
+	GeneratingMessage: "Generating commit message...",
 	Regenerating:      "Regenerating with feedback...",
 	ScanningSecrets:   "Scanning for secrets...",
 	CreatingCommit:    "Creating commit...",

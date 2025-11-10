@@ -574,6 +574,7 @@ func (r *Repository) StashPop(ctx context.Context) error {
 
 	return nil
 }
+
 // GetCommitsFromBranchPoint returns commits from branch point to HEAD.
 func (r *Repository) GetCommitsFromBranchPoint(ctx context.Context) ([]CommitInfo, error) {
 	branchPoint, err := r.GetBranchPoint(ctx)

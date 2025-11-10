@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gussy/cmt/internal/ai"
@@ -67,8 +69,8 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "model",
-				Usage: "Claude model to use (default: haiku-4.5)",
-				Value: "haiku-4.5",
+				Usage: "AI model to use (provider-specific)",
+				Value: "",
 			},
 			&cli.BoolFlag{
 				Name:  "no-secret-scan",
@@ -77,6 +79,11 @@ func main() {
 			&cli.BoolFlag{
 				Name:  "debug",
 				Usage: "Enable debug output",
+			},
+			&cli.StringFlag{
+				Name:  "provider",
+				Usage: "AI provider to use (codex, goose, claude)",
+				Value: "codex",
 			},
 		},
 		Commands: []*cli.Command{
@@ -134,11 +141,14 @@ func main() {
 
 // runCommit is the main workflow for generating and creating a commit.
 func runCommit(ctx context.Context, cmd *cli.Command) error {
+	debugMode := enableDebug(cmd)
+
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	logLoadedConfig(debugMode, cfg)
 
 	// Step 1: Initialize git repository
 	repo, err := git.NewRepository("")
@@ -228,15 +238,15 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		DefaultModel: cfg.Model,
 		Timeout:      60, // Default timeout
 	}
-	provider, err := ai.NewClaudeCLI(providerConfig)
+	provider, err := initProvider(cmd.String("provider"), providerConfig)
 	if err != nil {
-		return fmt.Errorf("failed to initialize Claude CLI: %w", err)
+		return fmt.Errorf("failed to initialize AI provider: %w", err)
 	}
 
-	// Check if Claude is available
+	// Check if provider is available
 	available, err := provider.IsAvailable(ctx)
 	if !available || err != nil {
-		return fmt.Errorf("Claude CLI is not available. Please ensure 'claude' is installed and in your PATH")
+		return fmt.Errorf("%s is not available. Please ensure it is installed and in your PATH", provider.Name())
 	}
 
 	// Step 7: Preprocess diff for AI
@@ -379,7 +389,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 
 			case ui.ReviewEditInline:
 				// Inline editing was done in the UI, update the message
-				response.Message = feedback  // feedback contains the edited message
+				response.Message = feedback // feedback contains the edited message
 				// Loop back to show the edited message for review
 				continue
 			}
@@ -505,4 +515,57 @@ func showDiff(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func initProvider(name string, cfg *ai.ProviderConfig) (ai.Provider, error) {
+	providerName := strings.TrimSpace(strings.ToLower(name))
+	if providerName == "" || providerName == "default" {
+		providerName = "codex"
+	}
+
+	switch providerName {
+	case "codex":
+		return ai.NewCodeX(cfg)
+	case "goose":
+		return ai.NewGoose(cfg)
+	case "claude", "claudecli", "claude-cli":
+		return ai.NewClaudeCLI(cfg)
+	default:
+		return nil, fmt.Errorf("unknown provider %q (supported: codex, goose, claude)", name)
+	}
+}
+
+func enableDebug(cmd *cli.Command) bool {
+	var flag bool
+	if cmd != nil {
+		flag = cmd.Bool("debug")
+	}
+
+	env := os.Getenv("GAC_DEBUG") != ""
+	if flag && !env {
+		_ = os.Setenv("GAC_DEBUG", "1")
+	}
+
+	return flag || env
+}
+
+func debugPrintf(enabled bool, format string, args ...interface{}) {
+	if !enabled {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+}
+
+func logLoadedConfig(enabled bool, cfg *config.Config) {
+	if !enabled {
+		return
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		debugPrintf(enabled, "Loaded config: %+v (marshal error: %v)", cfg, err)
+		return
+	}
+
+	debugPrintf(enabled, "Loaded config:\n%s", string(data))
 }

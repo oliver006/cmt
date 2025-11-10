@@ -1,0 +1,591 @@
+package ai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/gussy/cmt/internal/git"
+)
+
+// CodeX implements the Provider interface using the Codex CLI.
+type CodeX struct {
+	config    *ProviderConfig
+	codexPath string
+}
+
+// NewCodeX creates a new Codex CLI provider.
+func NewCodeX(config *ProviderConfig) (*CodeX, error) {
+	if config == nil {
+		config = &ProviderConfig{
+			DefaultModel: "gpt-5-codex",
+			Timeout:      60,
+		}
+	}
+
+	// Find codex executable
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		return nil, NewProviderError("codex-cli", "codex command not found in PATH", err)
+	}
+
+	return &CodeX{
+		config:    config,
+		codexPath: codexPath,
+	}, nil
+}
+
+// Name returns the provider name.
+func (c *CodeX) Name() string {
+	return "codex-cli"
+}
+
+// IsAvailable checks if Codex CLI is installed and accessible.
+func (c *CodeX) IsAvailable(ctx context.Context) (bool, error) {
+	cmd := exec.CommandContext(ctx, c.codexPath, "--version")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		// Provide more details about why codex is not available
+		errMsg := fmt.Sprintf("codex --version failed: %v", err)
+		if stderr.Len() > 0 {
+			errMsg = fmt.Sprintf("%s (stderr: %s)", errMsg, stderr.String())
+		}
+		if stdout.Len() > 0 {
+			errMsg = fmt.Sprintf("%s (stdout: %s)", errMsg, stdout.String())
+		}
+		return false, fmt.Errorf("%s", errMsg)
+	}
+	return true, nil
+}
+
+// GenerateCommitMessage generates a commit message using Codex CLI.
+func (c *CodeX) GenerateCommitMessage(ctx context.Context, req *CommitRequest) (*CommitResponse, error) {
+	if req.Diff == "" {
+		return nil, NewProviderError(c.Name(), "no diff provided", nil)
+	}
+
+	// Build the prompt
+	prompt := c.buildPrompt(req)
+
+	// Execute codex command
+	response, err := c.executeCodexCommand(ctx, prompt, req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse and clean the response
+	message := c.cleanResponse(response)
+
+	// Split into title and body for multi-line messages
+	title, body := c.splitMessage(message)
+
+	return &CommitResponse{
+		Message: message,
+		Title:   title,
+		Body:    body,
+		Model:   c.getModelName(req.Model),
+	}, nil
+}
+
+// RegenerateWithFeedback regenerates a commit message with user feedback.
+func (c *CodeX) RegenerateWithFeedback(ctx context.Context, req *CommitRequest, previousMessage string, feedback string) (*CommitResponse, error) {
+	// Build prompt with feedback
+	prompt := c.buildPromptWithFeedback(req, previousMessage, feedback)
+
+	// Execute codex command
+	response, err := c.executeCodexCommand(ctx, prompt, req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse and clean the response
+	message := c.cleanResponse(response)
+
+	// Split into title and body for multi-line messages
+	title, body := c.splitMessage(message)
+
+	return &CommitResponse{
+		Message: message,
+		Title:   title,
+		Body:    body,
+		Model:   c.getModelName(req.Model),
+	}, nil
+}
+
+// AnalyzeHunkAssignment analyzes which hunks should be absorbed into which commits.
+func (c *CodeX) AnalyzeHunkAssignment(ctx context.Context, req *AbsorbRequest) (*AbsorbResponse, error) {
+	if len(req.Hunks) == 0 {
+		return nil, NewProviderError(c.Name(), "no hunks provided", nil)
+	}
+
+	if len(req.Commits) == 0 {
+		// No commits to absorb into, all hunks are unmatched.
+		return &AbsorbResponse{
+			UnmatchedHunks: req.Hunks,
+			Model:          c.getModelName(req.Model),
+		}, nil
+	}
+
+	// Build the absorb prompt.
+	prompt := c.buildAbsorbPrompt(req)
+
+	// Execute codex command.
+	response, err := c.executeCodexCommand(ctx, prompt, req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the JSON response.
+	absorbResp, err := c.parseAbsorbResponse(response, req)
+	if err != nil {
+		return nil, NewProviderError(c.Name(), fmt.Sprintf("failed to parse absorb response: %v", err), err)
+	}
+
+	absorbResp.Model = c.getModelName(req.Model)
+	return absorbResp, nil
+}
+
+// GetDefaultModel returns the default model for Codex CLI.
+func (c *CodeX) GetDefaultModel() string {
+	if c.config.DefaultModel != "" {
+		return c.config.DefaultModel
+	}
+	return "gpt-5-codex"
+}
+
+// GetAvailableModels returns available Codex models.
+func (c *CodeX) GetAvailableModels() []string {
+	return []string{
+		"gpt-5-codex",
+	}
+}
+
+// executeCodexCommand executes the Codex CLI command with the given prompt.
+func (c *CodeX) executeCodexCommand(ctx context.Context, prompt string, model string) (string, error) {
+	if model == "" {
+		model = c.GetDefaultModel()
+	}
+
+	// Prepare the command
+	args := []string{}
+
+	args = append(args, "exec", "--sandbox", "read-only", "--skip-git-repo-check")
+
+	// Add model flag if specified
+	if model != "" && model != "default" {
+		args = append(args, "--model", c.mapModelName(model))
+	}
+
+	// Create command with timeout
+	timeout := time.Duration(c.config.Timeout) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.codexPath, args...)
+	cmd.Stdin = strings.NewReader(prompt)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Run the command
+	err := cmd.Run()
+	if err != nil {
+		stderrStr := stderr.String()
+		stdoutStr := stdout.String()
+
+		// Build detailed error message
+		errMsg := fmt.Sprintf("codex command failed (exit: %v)", err)
+		if stderrStr != "" {
+			errMsg = fmt.Sprintf("%s\nstderr: %s", errMsg, stderrStr)
+		}
+		if stdoutStr != "" {
+			errMsg = fmt.Sprintf("%s\nstdout: %s", errMsg, stdoutStr)
+		}
+
+		// Log command details for debugging
+		debugMsg := fmt.Sprintf("Command: %s %s\nPrompt length: %d chars",
+			c.codexPath, strings.Join(args, " "), len(prompt))
+
+		return "", NewProviderError(c.Name(), fmt.Sprintf("%s\nDebug: %s", errMsg, debugMsg), err)
+	}
+
+	output := stdout.String()
+	if output == "" {
+		return "", NewProviderError(c.Name(), "empty response from codex", nil)
+	}
+
+	return output, nil
+}
+
+// buildPrompt builds the prompt for commit message generation.
+func (c *CodeX) buildPrompt(req *CommitRequest) string {
+	var prompt strings.Builder
+
+	// Base instruction
+	switch req.Format {
+	case FormatOneLine:
+		prompt.WriteString("Generate a concise, single-line git commit message (max 50 characters) for the following changes.\n")
+		prompt.WriteString("The message should be clear and descriptive but very brief.\n")
+	case FormatVerbose:
+		prompt.WriteString("Generate a detailed git commit message for the following changes.\n")
+		prompt.WriteString("Include a short title line (max 50 chars), followed by a blank line, ")
+		prompt.WriteString("then a detailed explanation of what changed and why.\n")
+	default:
+		prompt.WriteString("Generate a clear and concise git commit message for the following changes.\n")
+		prompt.WriteString("Follow conventional commit format if applicable.\n")
+	}
+
+	// Add scope if provided
+	if req.Scope != "" {
+		prompt.WriteString(fmt.Sprintf("Use scope '%s' in the commit message (e.g., 'feat(%s): description').\n", req.Scope, req.Scope))
+	}
+
+	// Add user hint if provided
+	if req.Hint != "" {
+		prompt.WriteString(fmt.Sprintf("\nAdditional context: %s\n", req.Hint))
+	}
+
+	// Add file list
+	if len(req.StagedFiles) > 0 {
+		prompt.WriteString("\nFiles being committed:\n")
+		for _, file := range req.StagedFiles {
+			prompt.WriteString(fmt.Sprintf("- %s\n", file))
+		}
+	}
+
+	// Add the diff
+	prompt.WriteString("\nGit diff:\n```diff\n")
+	prompt.WriteString(req.Diff)
+	prompt.WriteString("\n```\n\n")
+
+	// Final instruction
+	prompt.WriteString("Generate only the commit message, without any additional explanation or formatting.")
+
+	return prompt.String()
+}
+
+// buildPromptWithFeedback builds a prompt that includes user feedback.
+func (c *CodeX) buildPromptWithFeedback(req *CommitRequest, previousMessage string, feedback string) string {
+	var prompt strings.Builder
+
+	// Start with context about regeneration
+	prompt.WriteString("The user requested changes to a git commit message.\n\n")
+	prompt.WriteString("Previous message:\n```\n")
+	prompt.WriteString(previousMessage)
+	prompt.WriteString("\n```\n\n")
+	prompt.WriteString("User feedback:\n")
+	prompt.WriteString(feedback)
+	prompt.WriteString("\n\n")
+
+	// Add the rest of the normal prompt
+	basePrompt := c.buildPrompt(req)
+	prompt.WriteString(basePrompt)
+
+	return prompt.String()
+}
+
+// cleanResponse cleans up the Codex response.
+func (c *CodeX) cleanResponse(response string) string {
+	// Remove leading/trailing whitespace
+	response = strings.TrimSpace(response)
+
+	// Remove code block markers if present
+	if strings.HasPrefix(response, "```") {
+		lines := strings.Split(response, "\n")
+		var cleaned []string
+		inCodeBlock := false
+		for _, line := range lines {
+			if strings.HasPrefix(line, "```") {
+				inCodeBlock = !inCodeBlock
+				continue
+			}
+			if !inCodeBlock {
+				cleaned = append(cleaned, line)
+			}
+		}
+		response = strings.Join(cleaned, "\n")
+	}
+
+	// Remove quotes if the entire message is quoted
+	if strings.HasPrefix(response, "\"") && strings.HasSuffix(response, "\"") {
+		response = strings.Trim(response, "\"")
+	}
+
+	return strings.TrimSpace(response)
+}
+
+// splitMessage splits a commit message into title and body.
+func (c *CodeX) splitMessage(message string) (string, string) {
+	lines := strings.Split(message, "\n")
+	if len(lines) == 0 {
+		return "", ""
+	}
+
+	title := lines[0]
+
+	// Find the body (skip blank lines after title)
+	var bodyLines []string
+	foundBody := false
+	for i := 1; i < len(lines); i++ {
+		if !foundBody && strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		foundBody = true
+		bodyLines = append(bodyLines, lines[i])
+	}
+
+	body := strings.TrimSpace(strings.Join(bodyLines, "\n"))
+
+	return title, body
+}
+
+// mapModelName maps user-friendly model names to Codex CLI model names.
+func (c *CodeX) mapModelName(model string) string {
+	// Remove version numbers and map to Codex CLI format
+	model = strings.ToLower(model)
+	return model
+
+}
+
+// getModelName returns the user-friendly model name.
+func (c *CodeX) getModelName(model string) string {
+	if model == "" {
+		model = c.GetDefaultModel()
+	}
+	return model
+}
+
+// buildAbsorbPrompt builds the prompt for hunk assignment analysis.
+func (c *CodeX) buildAbsorbPrompt(req *AbsorbRequest) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("You are analyzing git diff hunks to determine which previous commits they should be absorbed into.\n")
+	prompt.WriteString("Each hunk should be matched with the most semantically related commit based on:\n")
+	prompt.WriteString("1. File paths and names\n")
+	prompt.WriteString("2. Code context and functionality\n")
+	prompt.WriteString("3. Commit message relevance\n")
+	prompt.WriteString("4. Related changes in the same area\n\n")
+
+	if req.Strategy == "best-match" {
+		prompt.WriteString(fmt.Sprintf("Confidence threshold: %.2f (assign only if confidence is above this)\n", req.ConfidenceThreshold))
+		prompt.WriteString("Strategy: Choose the single best matching commit for each hunk.\n\n")
+	} else {
+		prompt.WriteString("Strategy: Provide alternatives when multiple commits could match.\n\n")
+	}
+
+	// Add commits information.
+	prompt.WriteString("Available commits (from oldest to newest):\n")
+	prompt.WriteString("=====================================\n")
+	for i, commit := range req.Commits {
+		// Get first line of commit message.
+		lines := strings.Split(commit.Message, "\n")
+		firstLine := lines[0]
+		if len(firstLine) > 72 {
+			firstLine = firstLine[:69] + "..."
+		}
+
+		prompt.WriteString(fmt.Sprintf("\nCommit %d: %s\n", i+1, commit.SHA[:8]))
+		prompt.WriteString(fmt.Sprintf("Message: %s\n", firstLine))
+
+		// Add a summary of the commit diff.
+		if len(commit.Diff) > 0 {
+			prompt.WriteString("Changed files:\n")
+			for _, line := range strings.Split(commit.Diff, "\n") {
+				if strings.HasPrefix(line, "diff --git") {
+					parts := strings.Split(line, " ")
+					if len(parts) >= 4 {
+						file := strings.TrimPrefix(parts[3], "b/")
+						prompt.WriteString(fmt.Sprintf("  - %s\n", file))
+					}
+				}
+			}
+		}
+	}
+
+	// Add hunks to analyze.
+	prompt.WriteString("\n\nHunks to analyze:\n")
+	prompt.WriteString("================\n")
+	for i, hunk := range req.Hunks {
+		prompt.WriteString(fmt.Sprintf("\nHunk %d:\n", i+1))
+		prompt.WriteString(fmt.Sprintf("File: %s\n", hunk.FilePath))
+		if hunk.IsNew {
+			prompt.WriteString("Status: NEW FILE\n")
+		} else if hunk.IsDeleted {
+			prompt.WriteString("Status: DELETED FILE\n")
+		} else if hunk.IsRenamed {
+			prompt.WriteString(fmt.Sprintf("Status: RENAMED from %s\n", hunk.OldFilePath))
+		}
+		prompt.WriteString(fmt.Sprintf("Lines: %s\n", hunk.Header))
+		prompt.WriteString("Content:\n```diff\n")
+		prompt.WriteString(hunk.Content)
+		prompt.WriteString("```\n")
+	}
+
+	// Request structured output.
+	prompt.WriteString("\n\nProvide your analysis as a JSON object with this structure:\n")
+	prompt.WriteString("```json\n")
+	prompt.WriteString("{\n")
+	prompt.WriteString("  \"assignments\": [\n")
+	prompt.WriteString("    {\n")
+	prompt.WriteString("      \"hunk_index\": 0,  // 0-based index of the hunk\n")
+	prompt.WriteString("      \"commit_sha\": \"abc123...\",  // Full SHA of the target commit\n")
+	prompt.WriteString("      \"confidence\": 0.95,  // Confidence score 0.0 to 1.0\n")
+	prompt.WriteString("      \"reasoning\": \"This hunk modifies the same function...\",\n")
+	prompt.WriteString("      \"alternatives\": [  // Optional, only if strategy is 'interactive'\n")
+	prompt.WriteString("        {\n")
+	prompt.WriteString("          \"commit_sha\": \"def456...\",\n")
+	prompt.WriteString("          \"confidence\": 0.7,\n")
+	prompt.WriteString("          \"reasoning\": \"Could also relate to...\"\n")
+	prompt.WriteString("        }\n")
+	prompt.WriteString("      ]\n")
+	prompt.WriteString("    }\n")
+	prompt.WriteString("  ],\n")
+	prompt.WriteString("  \"unmatched_hunks\": [0, 2]  // Indices of hunks that don't match any commit\n")
+	prompt.WriteString("}\n")
+	prompt.WriteString("```\n\n")
+	prompt.WriteString("Return ONLY the JSON object, no additional explanation.")
+
+	return prompt.String()
+}
+
+// parseAbsorbResponse parses the JSON response from the AI.
+func (c *CodeX) parseAbsorbResponse(response string, req *AbsorbRequest) (*AbsorbResponse, error) {
+	// Clean the response to extract JSON.
+	response = strings.TrimSpace(response)
+
+	// Remove code block markers if present.
+	if strings.Contains(response, "```json") {
+		start := strings.Index(response, "{")
+		end := strings.LastIndex(response, "}")
+		if start >= 0 && end > start {
+			response = response[start : end+1]
+		}
+	}
+
+	// Parse JSON.
+	var jsonResp absorbJSONResponse
+	if err := json.Unmarshal([]byte(response), &jsonResp); err != nil {
+		// Try to extract JSON from the response.
+		lines := strings.Split(response, "\n")
+		var jsonStr strings.Builder
+		inJSON := false
+		for _, line := range lines {
+			if strings.Contains(line, "{") {
+				inJSON = true
+			}
+			if inJSON {
+				jsonStr.WriteString(line + "\n")
+			}
+			if strings.Contains(line, "}") && inJSON {
+				break
+			}
+		}
+		if jsonStr.Len() > 0 {
+			if err := json.Unmarshal([]byte(jsonStr.String()), &jsonResp); err != nil {
+				return nil, fmt.Errorf("failed to parse JSON: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("no valid JSON found in response")
+		}
+	}
+
+	// Convert to AbsorbResponse.
+	resp := &AbsorbResponse{
+		Assignments:    []HunkAssignment{},
+		UnmatchedHunks: []git.Hunk{},
+	}
+
+	// Track which hunks were assigned.
+	assignedHunks := make(map[int]bool)
+
+	// Process assignments.
+	for _, assignment := range jsonResp.Assignments {
+		if assignment.HunkIndex < 0 || assignment.HunkIndex >= len(req.Hunks) {
+			continue
+		}
+
+		hunk := req.Hunks[assignment.HunkIndex]
+		assignedHunks[assignment.HunkIndex] = true
+
+		// Find commit message for this SHA.
+		var commitMessage string
+		for _, commit := range req.Commits {
+			if strings.HasPrefix(commit.SHA, assignment.CommitSHA[:8]) {
+				lines := strings.Split(commit.Message, "\n")
+				commitMessage = lines[0]
+				assignment.CommitSHA = commit.SHA // Use full SHA.
+				break
+			}
+		}
+
+		hunkAssignment := HunkAssignment{
+			Hunk:          hunk,
+			CommitSHA:     assignment.CommitSHA,
+			CommitMessage: commitMessage,
+			Confidence:    assignment.Confidence,
+			Reasoning:     assignment.Reasoning,
+		}
+
+		// Process alternatives.
+		for _, alt := range assignment.Alternatives {
+			var altMessage string
+			for _, commit := range req.Commits {
+				if strings.HasPrefix(commit.SHA, alt.CommitSHA[:8]) {
+					lines := strings.Split(commit.Message, "\n")
+					altMessage = lines[0]
+					alt.CommitSHA = commit.SHA
+					break
+				}
+			}
+
+			hunkAssignment.Alternatives = append(hunkAssignment.Alternatives, AlternativeAssignment{
+				CommitSHA:     alt.CommitSHA,
+				CommitMessage: altMessage,
+				Confidence:    alt.Confidence,
+				Reasoning:     alt.Reasoning,
+			})
+		}
+
+		// Apply confidence threshold if using best-match strategy.
+		if req.Strategy == "best-match" && assignment.Confidence < req.ConfidenceThreshold {
+			resp.UnmatchedHunks = append(resp.UnmatchedHunks, hunk)
+		} else {
+			resp.Assignments = append(resp.Assignments, hunkAssignment)
+		}
+	}
+
+	// Process unmatched hunks.
+	for _, idx := range jsonResp.UnmatchedHunks {
+		if idx >= 0 && idx < len(req.Hunks) && !assignedHunks[idx] {
+			resp.UnmatchedHunks = append(resp.UnmatchedHunks, req.Hunks[idx])
+		}
+	}
+
+	// Check for any hunks that weren't mentioned.
+	for i, hunk := range req.Hunks {
+		if !assignedHunks[i] {
+			found := false
+			for _, idx := range jsonResp.UnmatchedHunks {
+				if idx == i {
+					found = true
+					break
+				}
+			}
+			if !found {
+				// Hunk wasn't assigned or marked as unmatched.
+				resp.UnmatchedHunks = append(resp.UnmatchedHunks, hunk)
+			}
+		}
+	}
+
+	return resp, nil
+}
