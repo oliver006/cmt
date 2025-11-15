@@ -134,6 +134,8 @@ func main() {
 		},
 	}
 
+	fmt.Println("oliver's cmt")
+
 	if err := app.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
