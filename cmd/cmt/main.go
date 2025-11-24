@@ -25,6 +25,10 @@ var (
 	BuildTime = "unknown"
 )
 
+const (
+	defaultProvider = "claude"
+)
+
 func main() {
 	app := &cli.Command{
 		Name:                  "cmt",
@@ -36,6 +40,11 @@ func main() {
 				Name:    "stage-all",
 				Aliases: []string{"a"},
 				Usage:   "Stage all changes before generating commit message",
+			},
+			&cli.BoolFlag{
+				Name:    "stage-updated",
+				Aliases: []string{"u"},
+				Usage:   "Stage all changes to updated files, before generating commit message",
 			},
 			&cli.BoolFlag{
 				Name:    "yes",
@@ -82,8 +91,8 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "provider",
-				Usage: "AI provider to use (codex, goose, claude)",
-				Value: "codex",
+				Usage: "AI provider to use - codex, goose, claude (default)",
+				Value: "",
 			},
 		},
 		Commands: []*cli.Command{
@@ -166,6 +175,14 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
+	// Step 2: Stage files if requested
+	if cmd.Bool("stage-updated") {
+		ui.SimpleProgress(ui.ProgressMessages.UpdatedFiles)
+		if err := repo.StageUpdated(ctx); err != nil {
+			return fmt.Errorf("failed to stage files: %w", err)
+		}
+	}
+
 	// Step 3: Check if there are staged changes
 	hasChanges, err := repo.HasStagedChanges(ctx)
 	if err != nil {
@@ -240,10 +257,17 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		DefaultModel: cfg.Model,
 		Timeout:      60, // Default timeout
 	}
-	provider, err := initProvider(cmd.String("provider"), providerConfig)
+
+	pName := cfg.Provider
+	if p := cmd.String("provider"); p != "" {
+		pName = p
+	}
+
+	provider, err := initProvider(pName, providerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to initialize AI provider: %w", err)
 	}
+	log.Printf("provider: %#v", provider)
 
 	// Check if provider is available
 	available, err := provider.IsAvailable(ctx)
@@ -520,9 +544,10 @@ func showDiff(ctx context.Context) error {
 }
 
 func initProvider(name string, cfg *ai.ProviderConfig) (ai.Provider, error) {
+	log.Printf("Initializing provider: %s", name)
 	providerName := strings.TrimSpace(strings.ToLower(name))
 	if providerName == "" || providerName == "default" {
-		providerName = "codex"
+		providerName = defaultProvider
 	}
 
 	switch providerName {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 // Config represents the configuration structure for cmt.
 type Config struct {
 	// AI settings
+	Provider    string  `yaml:"provider"`
 	Model       string  `yaml:"model"`
 	Temperature float64 `yaml:"temperature"`
 	MaxTokens   int     `yaml:"max_tokens"`
@@ -91,6 +93,8 @@ func LoadConfig() (*Config, error) {
 
 	// Apply environment variable overrides
 	applyEnvOverrides(config)
+
+	log.Printf("loaded config %#v", config)
 
 	return config, nil
 }

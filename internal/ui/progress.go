@@ -119,6 +119,7 @@ func ShowProgress(message string) *tea.Program {
 // ProgressMessages defines common progress messages.
 var ProgressMessages = struct {
 	StagingFiles      string
+	UpdatedFiles      string
 	AnalyzingChanges  string
 	GeneratingMessage string
 	Regenerating      string
@@ -127,6 +128,7 @@ var ProgressMessages = struct {
 	PushingChanges    string
 }{
 	StagingFiles:      "Staging all changes...",
+	UpdatedFiles:      "Staging updates files...",
 	AnalyzingChanges:  "Analyzing changes...",
 	GeneratingMessage: "Generating commit message...",
 	Regenerating:      "Regenerating with feedback...",

@@ -191,6 +191,18 @@ func (r *Repository) StageAll(ctx context.Context) error {
 	return nil
 }
 
+// StageAll stages all changes in the repository.
+func (r *Repository) StageUpdated(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "git", "add", "-u")
+	cmd.Dir = r.Path
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stage all files: %w", err)
+	}
+
+	return nil
+}
+
 // StageFiles stages specific files.
 func (r *Repository) StageFiles(ctx context.Context, files []string) error {
 	if len(files) == 0 {
