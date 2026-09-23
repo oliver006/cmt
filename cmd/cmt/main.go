@@ -30,7 +30,7 @@ const (
 )
 
 func main() {
-	fmt.Println("oliver's clean cmt")
+	fmt.Println("oliver's new cmt")
 	if err := newCommand().Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func main() {
 func newCommand() *cli.Command {
 	return &cli.Command{
 		Name:                  "cmt",
-		Usage:                 "Commit Message Tool - Generate contextual commit messages using Claude AI",
+		Usage:                 "Commit Message Tool - Generate contextual commit messages",
 		Version:               fmt.Sprintf("%s (built %s)", Version, BuildTime),
 		EnableShellCompletion: true,
 		Flags: []cli.Flag{

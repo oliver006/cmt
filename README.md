@@ -1,10 +1,13 @@
-# cmt
+# cmt multi-provider
+
+forked from https://github.com/gussy/cmt
+
 
 `cmt` is a CLI tool that automatically generates meaningful commit messages by analyzing your staged changes using I. No API keys required, it uses the Claude Code CLI for authentication.
 
 ## Key Features
 
-- **AI-Powered Messages** - Generates contextual commit messages using Claude AI (supports Haiku, Sonnet, and Opus models)
+- **AI-Powered Messages** - Generates contextual commit messages using Codex, Claude, and possibly others
 - **AI-Driven Absorb** - Intelligently assigns staged hunks to previous commits using semantic analysis (like git-absorb but smarter)
 - **Interactive Review UI** - Built-in TUI for reviewing, regenerating, or editing messages before committing
 - **Secret Detection** - Scans staged files for 15+ secret patterns (AWS keys, GitHub tokens, JWTs, private keys)
