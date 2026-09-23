@@ -320,6 +320,9 @@ func (c *ClaudeCLI) cleanResponse(response string) string {
 		response = strings.Trim(response, "\"")
 	}
 
+	response = strings.Replace(response, "🤖 Generated with [Claude Code](https://claude.com/claude-code)", "", -1)
+	response = strings.Replace(response, "Co-Authored-By: Claude <noreply@anthropic.com>", "", -1)
+
 	return strings.TrimSpace(response)
 }
 

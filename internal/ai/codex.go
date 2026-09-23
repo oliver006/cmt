@@ -22,8 +22,7 @@ type CodeX struct {
 func NewCodeX(config *ProviderConfig) (*CodeX, error) {
 	if config == nil {
 		config = &ProviderConfig{
-			DefaultModel: "gpt-5-codex",
-			Timeout:      60,
+			Timeout: 60,
 		}
 	}
 
@@ -158,14 +157,12 @@ func (c *CodeX) GetDefaultModel() string {
 	if c.config.DefaultModel != "" {
 		return c.config.DefaultModel
 	}
-	return "gpt-5-codex"
+	return "default"
 }
 
-// GetAvailableModels returns available Codex models.
+// GetAvailableModels returns the configured model or the Codex CLI default.
 func (c *CodeX) GetAvailableModels() []string {
-	return []string{
-		"gpt-5-codex",
-	}
+	return []string{c.GetDefaultModel()}
 }
 
 // executeCodexCommand executes the Codex CLI command with the given prompt.
@@ -182,6 +179,9 @@ func (c *CodeX) executeCodexCommand(ctx context.Context, prompt string, model st
 	// Add model flag if specified
 	if model != "" && model != "default" {
 		args = append(args, "--model", c.mapModelName(model))
+	}
+	if c.config.ModelReasoningEffort != "" {
+		args = append(args, "--config", fmt.Sprintf("model_reasoning_effort=%q", c.config.ModelReasoningEffort))
 	}
 
 	// Create command with timeout

@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,10 +12,11 @@ import (
 // Config represents the configuration structure for cmt.
 type Config struct {
 	// AI settings
-	Provider    string  `yaml:"provider"`
-	Model       string  `yaml:"model"`
-	Temperature float64 `yaml:"temperature"`
-	MaxTokens   int     `yaml:"max_tokens"`
+	Provider             string  `yaml:"provider"`
+	Model                string  `yaml:"model"`
+	ModelReasoningEffort string  `yaml:"model_reasoning_effort"`
+	Temperature          float64 `yaml:"temperature"`
+	MaxTokens            int     `yaml:"max_tokens"`
 
 	// Behavior settings
 	AlwaysScope      bool   `yaml:"always_scope"`
@@ -46,7 +46,6 @@ type Config struct {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Model:            "claude-3-5-sonnet-latest",
 		Temperature:      0.2,
 		MaxTokens:        500,
 		AlwaysScope:      false,
@@ -94,8 +93,6 @@ func LoadConfig() (*Config, error) {
 	// Apply environment variable overrides
 	applyEnvOverrides(config)
 
-	log.Printf("loaded config %#v", config)
-
 	return config, nil
 }
 
@@ -116,8 +113,14 @@ func loadFromFile(path string, config *Config) error {
 // applyEnvOverrides applies environment variable overrides to the config.
 func applyEnvOverrides(config *Config) {
 	// AI settings
+	if provider := os.Getenv("CMT_PROVIDER"); provider != "" {
+		config.Provider = provider
+	}
 	if model := os.Getenv("CMT_MODEL"); model != "" {
 		config.Model = model
+	}
+	if effort := os.Getenv("CMT_MODEL_REASONING_EFFORT"); effort != "" {
+		config.ModelReasoningEffort = effort
 	}
 	if temp := os.Getenv("CMT_TEMPERATURE"); temp != "" {
 		if val, err := strconv.ParseFloat(temp, 64); err == nil {
@@ -237,8 +240,12 @@ func (c *Config) Save(global bool) error {
 func (c *Config) Get(key string) (interface{}, error) {
 	switch key {
 	// AI settings
+	case "provider":
+		return c.Provider, nil
 	case "model":
 		return c.Model, nil
+	case "model_reasoning_effort":
+		return c.ModelReasoningEffort, nil
 	case "temperature":
 		return c.Temperature, nil
 	case "max_tokens":
@@ -288,8 +295,12 @@ func (c *Config) Get(key string) (interface{}, error) {
 func (c *Config) Set(key string, value string) error {
 	switch key {
 	// AI settings
+	case "provider":
+		c.Provider = value
 	case "model":
 		c.Model = value
+	case "model_reasoning_effort":
+		c.ModelReasoningEffort = value
 	case "temperature":
 		val, err := strconv.ParseFloat(value, 64)
 		if err != nil {

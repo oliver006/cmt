@@ -85,6 +85,8 @@ type ProviderConfig struct {
 	BaseURL string
 	// DefaultModel is the default model to use.
 	DefaultModel string
+	// ModelReasoningEffort overrides the Codex CLI reasoning effort when set.
+	ModelReasoningEffort string
 	// Timeout is the request timeout in seconds.
 	Timeout int
 }

@@ -10,8 +10,8 @@ func TestDefault(t *testing.T) {
 	cfg := Default()
 
 	// Check AI settings
-	if cfg.Model != "claude-3-5-sonnet-latest" {
-		t.Errorf("expected default model to be claude-3-5-sonnet-latest, got %s", cfg.Model)
+	if cfg.Model != "" {
+		t.Errorf("expected model to use the provider default, got %s", cfg.Model)
 	}
 	if cfg.Temperature != 0.2 {
 		t.Errorf("expected default temperature to be 0.2, got %f", cfg.Temperature)
@@ -161,7 +161,9 @@ func TestGetSet(t *testing.T) {
 		expected interface{}
 		hasError bool
 	}{
-		{"model", "claude-3-5-sonnet-latest", false},
+		{"provider", "", false},
+		{"model", "", false},
+		{"model_reasoning_effort", "", false},
 		{"temperature", 0.2, false},
 		{"max_tokens", 500, false},
 		{"always_scope", false, false},
@@ -196,6 +198,8 @@ func TestGetSet(t *testing.T) {
 		expected interface{}
 		hasError bool
 	}{
+		{"provider", "codex", "codex", false},
+		{"model_reasoning_effort", "high", "high", false},
 		{"model", "opus-3", "opus-3", false},
 		{"temperature", "0.5", 0.5, false},
 		{"temperature", "invalid", 0.5, true},
@@ -398,4 +402,45 @@ func TestLoadConfigPrecedence(t *testing.T) {
 	if cfg.Model != "env-model" {
 		t.Errorf("expected env-model, got %s", cfg.Model)
 	}
+}
+
+func TestAIConfigPrecedence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	for _, key := range []string{"CMT_PROVIDER", "CMT_MODEL", "CMT_MODEL_REASONING_EFFORT"} {
+		t.Setenv(key, "")
+	}
+	global := &Config{Provider: "codex", Model: "gpt-6-astra", ModelReasoningEffort: "high"}
+	if err := global.Save(true); err != nil {
+		t.Fatal(err)
+	}
+	check := func(provider, model, effort string) {
+		t.Helper()
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Provider != provider || cfg.Model != model || cfg.ModelReasoningEffort != effort {
+			t.Fatalf("got %s/%s/%s, want %s/%s/%s",
+				cfg.Provider, cfg.Model, cfg.ModelReasoningEffort, provider, model, effort)
+		}
+	}
+	check("codex", "gpt-6-astra", "high")
+
+	// A partial local config preserves the other global settings.
+	if err := os.WriteFile(".cmt.yml", []byte("model: local-model\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	check("codex", "local-model", "high")
+
+	local := &Config{Provider: "claude", Model: "sonnet", ModelReasoningEffort: "low"}
+	if err := local.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	check("claude", "sonnet", "low")
+
+	t.Setenv("CMT_PROVIDER", "codex")
+	t.Setenv("CMT_MODEL", "env-model")
+	t.Setenv("CMT_MODEL_REASONING_EFFORT", "medium")
+	check("codex", "env-model", "medium")
 }

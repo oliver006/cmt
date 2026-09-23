@@ -30,7 +30,14 @@ const (
 )
 
 func main() {
-	app := &cli.Command{
+	fmt.Println("oliver's clean cmt")
+	if err := newCommand().Run(context.Background(), os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func newCommand() *cli.Command {
+	return &cli.Command{
 		Name:                  "cmt",
 		Usage:                 "Commit Message Tool - Generate contextual commit messages using Claude AI",
 		Version:               fmt.Sprintf("%s (built %s)", Version, BuildTime),
@@ -77,9 +84,9 @@ func main() {
 				Usage:   "Push to remote after committing",
 			},
 			&cli.StringFlag{
-				Name:  "model",
-				Usage: "AI model to use (provider-specific)",
-				Value: "",
+				Name:    "model",
+				Aliases: []string{"m"},
+				Usage:   "AI model to use (provider-specific)",
 			},
 			&cli.BoolFlag{
 				Name:  "no-secret-scan",
@@ -141,12 +148,6 @@ func main() {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			return runCommit(ctx, cmd)
 		},
-	}
-
-	fmt.Println("oliver's cmt")
-
-	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
 	}
 }
 
@@ -252,22 +253,11 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	// Step 6: Initialize AI provider with config
-	providerConfig := &ai.ProviderConfig{
-		DefaultModel: cfg.Model,
-		Timeout:      60, // Default timeout
-	}
-
-	pName := cfg.Provider
-	if p := cmd.String("provider"); p != "" {
-		pName = p
-	}
-
-	provider, err := initProvider(pName, providerConfig)
+	// Step 6: Initialize AI provider with config.
+	provider, err := configuredProvider(cmd, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize AI provider: %w", err)
 	}
-	log.Printf("provider: %#v", provider)
 
 	// Check if provider is available
 	available, err := provider.IsAvailable(ctx)
@@ -321,10 +311,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Build the request with config values (command flags override config)
-	model := cmd.String("model")
-	if model == "" {
-		model = cfg.Model
-	}
+	model := provider.GetDefaultModel()
 
 	// Apply scope from config if always_scope is enabled and no scope provided
 	scope := cmd.String("scope")
@@ -543,8 +530,24 @@ func showDiff(ctx context.Context) error {
 	return nil
 }
 
+// configuredProvider applies CLI overrides to the configured provider settings.
+func configuredProvider(cmd *cli.Command, cfg *config.Config) (ai.Provider, error) {
+	name := cfg.Provider
+	if provider := cmd.String("provider"); provider != "" {
+		name = provider
+	}
+	model := cfg.Model
+	if override := cmd.String("model"); override != "" {
+		model = override
+	}
+	return initProvider(name, &ai.ProviderConfig{
+		DefaultModel:         model,
+		ModelReasoningEffort: cfg.ModelReasoningEffort,
+		Timeout:              60,
+	})
+}
+
 func initProvider(name string, cfg *ai.ProviderConfig) (ai.Provider, error) {
-	log.Printf("Initializing provider: %s", name)
 	providerName := strings.TrimSpace(strings.ToLower(name))
 	if providerName == "" || providerName == "default" {
 		providerName = defaultProvider

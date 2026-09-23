@@ -17,14 +17,21 @@
 # AI Settings
 # ===================
 
-# AI model to use for commit message generation
-# Available models:
-#   - claude-3-5-sonnet-latest (default, balanced performance)
-#   - haiku-4.5 (fastest, good for simple commits)
-#   - sonnet-4.5 (better quality)
-#   - opus-4.1 (highest quality, slowest)
+# AI provider: claude (default), codex, or goose
+# Environment: CMT_PROVIDER
+provider: claude
+
+# AI model to use for commit message generation and absorb analysis
+# Empty uses the selected provider's default.
+# For Codex, empty or "default" uses the model configured in Codex CLI.
+# Example for Codex: model: gpt-6-astra
 # Environment: CMT_MODEL
-model: claude-3-5-sonnet-latest
+model: ""
+
+# Codex reasoning effort (e.g. low, medium, high, xhigh)
+# Empty inherits the Codex CLI setting. Other providers ignore this setting.
+# Environment: CMT_MODEL_REASONING_EFFORT
+model_reasoning_effort: ""
 
 # Temperature for AI generation (0.0-1.0)
 # Lower values (0.0-0.3): More deterministic, consistent output

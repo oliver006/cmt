@@ -46,11 +46,6 @@ with semantic understanding. It creates fixup commits that can be autosquashed.`
 				Name:  "no-new-commit",
 				Usage: "Don't create a new commit for unmatched hunks",
 			},
-			&cli.StringFlag{
-				Name:    "model",
-				Aliases: []string{"m"},
-				Usage:   "AI model to use for analysis",
-			},
 			&cli.BoolFlag{
 				Name:  "rebase",
 				Usage: "Automatically perform autosquash rebase after creating fixup commits",
@@ -193,20 +188,11 @@ func runAbsorb(ctx context.Context, cmd *cli.Command) error {
 
 	// Step 5: Initialize AI provider.
 	ui.SimpleProgress("Initializing AI provider...")
-	model := cmd.String("model")
-	if model == "" {
-		model = cfg.Model
-	}
-
-	providerCfg := &ai.ProviderConfig{
-		DefaultModel: model,
-		Timeout:      60,
-	}
-
-	provider, err := ai.NewClaudeCLI(providerCfg)
+	provider, err := configuredProvider(cmd, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize AI provider: %w", err)
 	}
+	model := provider.GetDefaultModel()
 
 	// Check if provider is available.
 	available, err := provider.IsAvailable(ctx)

@@ -128,20 +128,32 @@ After installing completions, restart your shell or source your shell configurat
 Create a `.cmt.yml` in your project root or `~/.config/cmt/config.yml` globally:
 
 ```yaml
-model: haiku-4.5        # Options: haiku-4.5, sonnet-4.5, opus-4.1
-format: conventional     # Options: conventional, gitmoji, semantic
+provider: codex        # Options: claude (default), codex, goose
+model: gpt-6-astra
+model_reasoning_effort: high # Codex only
 verbose: false
 skip_secret_scan: false
 ```
 
 See [config.example.yml](config.example.yml) for all available options.
 
+Both commit generation and `cmt absorb` use these settings. Precedence is CLI flags,
+then environment variables, then local config, then global config, then provider defaults.
+For Codex, an omitted or empty model (or `model: default`) uses the Codex CLI's configured
+model. An omitted or empty `model_reasoning_effort` uses the Codex CLI's configured effort.
+
+Use `cmt config get model` to inspect the effective config value. Use
+`cmt config set model gpt-6-astra`, `cmt config set provider codex`, and
+`cmt config set model_reasoning_effort high` to write local settings.
+
 ### Environment Variables
 
 Override any configuration option with `CMT_*` prefix:
 
 ```bash
-export CMT_MODEL=sonnet-4.5
+export CMT_PROVIDER=codex
+export CMT_MODEL=gpt-6-astra
+export CMT_MODEL_REASONING_EFFORT=high
 export CMT_VERBOSE=true
 export CMT_ABSORB_STRATEGY=direct
 export CMT_ABSORB_CONFIDENCE=0.8
